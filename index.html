@@ -29,7 +29,7 @@ const FIREBASE_CONFIG = {
   appId: "1:660310232252:web:bda9a6da90b1862c8ad4b9",
 };
 const GROUP_CODE = "barbets";
-const ADMIN_PIN = "1234";
+const ADMIN_PIN = "0969";
 const FRIENDS = ["Mike", "Chris", "Tim", "Troy", "Ryan", "Bill B", "Bill C", "Sean"]; // edit to match your group (<20 names)
 const USE_LOCAL_FALLBACK = false; // now using Firestore (barbets-f400e)
 // ============================================================
@@ -365,6 +365,16 @@ function saveBet(bet) {
     return Promise.resolve();
   }
   return db.collection("bets").doc(bet.id).set(bet);
+}
+
+function deleteBet(id) {
+  if (USE_LOCAL_FALLBACK) {
+    const bets = loadLocalBets().filter(b => b.id !== id);
+    saveLocalBets(bets);
+    notifyLocalListeners();
+    return Promise.resolve();
+  }
+  return db.collection("bets").doc(id).delete();
 }
 
 function updateBet(id, patch) {
@@ -839,12 +849,19 @@ function BarbetsApp({ name, friends, onSwitchUser }) {
     setPinAction({ type: "resolve", betId });
   }
 
+  function handleRequestDelete(betId) {
+    setPinAction({ type: "delete", betId });
+  }
+
   function handlePinConfirm() {
     if (!pinAction) return;
     if (pinAction.type === "lock") {
       updateBet(pinAction.betId, { status: "locked", lockedAt: nowIso() });
     } else if (pinAction.type === "resolve") {
       updateBet(pinAction.betId, { status: "resolved", resolvedAt: nowIso() });
+    } else if (pinAction.type === "delete") {
+      deleteBet(pinAction.betId);
+      setSelectedBetId(null);
     }
     setPinAction(null);
   }
@@ -920,15 +937,18 @@ function BarbetsApp({ name, friends, onSwitchUser }) {
           onToggleSettle={handleToggleSettle}
           onRequestLock={handleRequestLock}
           onRequestConfirmResolution={handleRequestConfirmResolution}
+          onRequestDelete={handleRequestDelete}
         />
       )}
 
       {pinAction && (
         <PinModal
-          title={pinAction.type === "lock" ? "Lock This Bet" : "Confirm Resolution"}
+          title={pinAction.type === "lock" ? "Lock This Bet" : pinAction.type === "resolve" ? "Confirm Resolution" : "Delete This Bet"}
           message={pinAction.type === "lock"
             ? "Enter the admin PIN to lock this bet. Once locked, the terms can't be changed."
-            : "Enter the admin PIN to confirm this outcome and settle the bet."}
+            : pinAction.type === "resolve"
+            ? "Enter the admin PIN to confirm this outcome and settle the bet."
+            : "Enter the admin PIN to permanently delete this bet. This can't be undone."}
           onConfirm={handlePinConfirm}
           onCancel={handlePinCancel}
         />
@@ -1291,7 +1311,7 @@ function DurationProgress({ bet }) {
 }
 
 // ============================================================
-// PIN modal -- gates "Lock Bet" and "Confirm Resolution"
+// PIN modal -- gates "Lock Bet", "Confirm Resolution", and "Delete Bet"
 // ============================================================
 function PinModal({ title, message, onConfirm, onCancel }) {
   const [pin, setPin] = React.useState("");
@@ -1386,7 +1406,7 @@ function BetsList({ bets, onSelectBet, onGoToNewBet }) {
 // ============================================================
 // Bet detail -- slide-over with positions, lifecycle actions, comments
 // ============================================================
-function BetDetail({ bet, onClose, onSubmitResolution, onReviseResolution, onAddComment, onToggleSettle, onRequestLock, onRequestConfirmResolution }) {
+function BetDetail({ bet, onClose, onSubmitResolution, onReviseResolution, onAddComment, onToggleSettle, onRequestLock, onRequestConfirmResolution, onRequestDelete }) {
   const [commentText, setCommentText] = React.useState("");
   const [resultDraft, setResultDraft] = React.useState("");
   const [actualDateDraft, setActualDateDraft] = React.useState(() => new Date().toISOString().slice(0, 10));
@@ -1592,6 +1612,13 @@ function BetDetail({ bet, onClose, onSubmitResolution, onReviseResolution, onAdd
             </div>
           </div>
         )}
+
+        <div className="detail-section">
+          <h4>Admin</h4>
+          <div className="form-actions" style={{ justifyContent: "flex-start" }}>
+            <button className="btn btn-danger" onClick={() => onRequestDelete(bet.id)}>Delete Bet</button>
+          </div>
+        </div>
       </div>
     </div>
   );
