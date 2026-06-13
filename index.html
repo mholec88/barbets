@@ -820,7 +820,8 @@ function BarbetsApp({ name, friends, onSwitchUser }) {
   const [bets, setBets] = React.useState([]);
   const [activeTab, setActiveTab] = React.useState("activity");
   const [selectedBetId, setSelectedBetId] = React.useState(null);
-  const [pinAction, setPinAction] = React.useState(null); // { type: "lock" | "resolve", betId }
+  const [editingBetId, setEditingBetId] = React.useState(null);
+  const [pinAction, setPinAction] = React.useState(null); // { type: "lock" | "resolve" | "delete", betId }
 
   React.useEffect(() => {
     const unsubscribe = subscribeBets(setBets);
@@ -828,9 +829,35 @@ function BarbetsApp({ name, friends, onSwitchUser }) {
   }, []);
 
   const selectedBet = bets.find(b => b.id === selectedBetId) || null;
+  const editingBet = bets.find(b => b.id === editingBetId) || null;
 
   function handleCreateBet(bet) {
     saveBet(bet).then(() => setActiveTab("bets"));
+  }
+
+  function handleUpdateBetFields(id, patch) {
+    updateBet(id, patch);
+  }
+
+  function handleEditBet(betId) {
+    setEditingBetId(betId);
+    setSelectedBetId(null);
+    setActiveTab("new");
+  }
+
+  function handleCancelEdit() {
+    setEditingBetId(null);
+    setActiveTab("bets");
+  }
+
+  function handleTabClick(tabId) {
+    setActiveTab(tabId);
+    if (tabId !== "new") setEditingBetId(null);
+  }
+
+  function handleGoToNewBet() {
+    setEditingBetId(null);
+    setActiveTab("new");
   }
 
   function handleSelectBet(betId) {
@@ -910,7 +937,7 @@ function BarbetsApp({ name, friends, onSwitchUser }) {
           <button
             key={tab.id}
             className={"tab-btn" + (activeTab === tab.id ? " active" : "")}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => handleTabClick(tab.id)}
           >
             {tab.label}
           </button>
@@ -919,10 +946,18 @@ function BarbetsApp({ name, friends, onSwitchUser }) {
       <main className="app-main">
         {activeTab === "activity" && <ActivityFeed bets={bets} onSelectBet={handleSelectBet} />}
         {activeTab === "bets" && (
-          <BetsList bets={bets} onSelectBet={handleSelectBet} onGoToNewBet={() => setActiveTab("new")} />
+          <BetsList bets={bets} onSelectBet={handleSelectBet} onGoToNewBet={handleGoToNewBet} />
         )}
         {activeTab === "new" && (
-          <NewBetForm name={name} friends={friends} onCreate={handleCreateBet} />
+          <NewBetForm
+            key={editingBet ? editingBet.id : "new"}
+            name={name}
+            friends={friends}
+            editingBet={editingBet}
+            onCreate={handleCreateBet}
+            onUpdate={handleUpdateBetFields}
+            onCancelEdit={handleCancelEdit}
+          />
         )}
         {activeTab === "leaderboard" && <Leaderboard bets={bets} friends={friends} />}
       </main>
@@ -938,6 +973,7 @@ function BarbetsApp({ name, friends, onSwitchUser }) {
           onRequestLock={handleRequestLock}
           onRequestConfirmResolution={handleRequestConfirmResolution}
           onRequestDelete={handleRequestDelete}
+          onEdit={handleEditBet}
         />
       )}
 
@@ -1088,15 +1124,26 @@ function ParticipantRowEditor({ participant, durationBet, friends, onChange, onR
   );
 }
 
-function NewBetForm({ name, friends, onCreate }) {
-  const [title, setTitle] = React.useState("");
-  const [description, setDescription] = React.useState("");
-  const [category, setCategory] = React.useState(CATEGORIES[0]);
-  const [mode, setMode] = React.useState("wager");
-  const [durationBet, setDurationBet] = React.useState(false);
-  const [anchorDate, setAnchorDate] = React.useState(() => new Date().toISOString().slice(0, 10));
-  const [wagers, setWagers] = React.useState([emptyWager(name)]);
-  const [participants, setParticipants] = React.useState([emptyParticipant(name, false)]);
+function NewBetForm({ name, friends, editingBet, onCreate, onUpdate, onCancelEdit }) {
+  const isEdit = !!editingBet;
+  const [title, setTitle] = React.useState(editingBet ? editingBet.title : "");
+  const [description, setDescription] = React.useState(editingBet ? editingBet.description : "");
+  const [category, setCategory] = React.useState(editingBet ? editingBet.category : CATEGORIES[0]);
+  const [mode, setMode] = React.useState(editingBet ? editingBet.mode : "wager");
+  const [durationBet, setDurationBet] = React.useState(editingBet ? editingBet.durationBet : false);
+  const [anchorDate, setAnchorDate] = React.useState(() => (editingBet && editingBet.anchorDate) || new Date().toISOString().slice(0, 10));
+  const [wagers, setWagers] = React.useState(() => (
+    editingBet && editingBet.mode === "wager"
+      ? editingBet.wagers.map(w => ({ id: w.id || uid(), stakeType: w.stakeType, amount: String(w.amount), sideA: { ...w.sideA }, sideB: { ...w.sideB } }))
+      : [emptyWager(name)]
+  ));
+  const [participants, setParticipants] = React.useState(() => (
+    editingBet && editingBet.mode === "pool"
+      ? editingBet.participants.map(p => ({ id: uid(), name: p.name, guess: editingBet.durationBet ? { ...p.guess } : p.guess, stakeType: p.stakeType, stakeAmount: String(p.stakeAmount) }))
+      : [emptyParticipant(name, false)]
+  ));
+  const [defaultStakeType, setDefaultStakeType] = React.useState("cash");
+  const [defaultStakeAmount, setDefaultStakeAmount] = React.useState("");
   const [error, setError] = React.useState("");
 
   function toggleDurationBet() {
@@ -1110,8 +1157,19 @@ function NewBetForm({ name, friends, onCreate }) {
   function removeWager(idx) { setWagers(wagers.filter((_, i) => i !== idx)); }
 
   function updateParticipant(idx, updated) { setParticipants(participants.map((p, i) => i === idx ? updated : p)); }
-  function addParticipant() { setParticipants([...participants, emptyParticipant("", durationBet)]); }
+  function addParticipant() {
+    const p = emptyParticipant("", durationBet);
+    if (defaultStakeAmount) {
+      p.stakeType = defaultStakeType;
+      p.stakeAmount = defaultStakeAmount;
+    }
+    setParticipants([...participants, p]);
+  }
   function removeParticipant(idx) { setParticipants(participants.filter((_, i) => i !== idx)); }
+  function applyStakeToAll() {
+    if (!defaultStakeAmount || Number(defaultStakeAmount) <= 0) return;
+    setParticipants(participants.map(p => ({ ...p, stakeType: defaultStakeType, stakeAmount: defaultStakeAmount })));
+  }
 
   function resetForm() {
     setTitle("");
@@ -1149,21 +1207,13 @@ function NewBetForm({ name, friends, onCreate }) {
       }
     }
 
-    const bet = {
-      id: uid(),
+    const betFields = {
       title: title.trim(),
       description: description.trim(),
       category,
       mode,
       durationBet: mode === "pool" ? durationBet : false,
       anchorDate: mode === "pool" && durationBet ? anchorDate : null,
-      status: "draft",
-      outcome: null,
-      createdAt: nowIso(),
-      createdBy: name,
-      lockedAt: null,
-      resolvedAt: null,
-      comments: [],
       wagers: mode === "wager" ? wagers.map(w => ({
         id: w.id, stakeType: w.stakeType, amount: Number(w.amount),
         sideA: { name: w.sideA.name, label: w.sideA.label.trim() },
@@ -1181,13 +1231,28 @@ function NewBetForm({ name, friends, onCreate }) {
       })) : null,
     };
 
-    onCreate(bet);
-    resetForm();
+    if (isEdit) {
+      onUpdate(editingBet.id, betFields);
+      onCancelEdit();
+    } else {
+      onCreate({
+        id: uid(),
+        ...betFields,
+        status: "draft",
+        outcome: null,
+        createdAt: nowIso(),
+        createdBy: name,
+        lockedAt: null,
+        resolvedAt: null,
+        comments: [],
+      });
+      resetForm();
+    }
   }
 
   return (
     <div className="card">
-      <h3 style={{ marginBottom: "16px" }}>Create a New Bet</h3>
+      <h3 style={{ marginBottom: "16px" }}>{isEdit ? "Edit Bet" : "Create a New Bet"}</h3>
       <form className="form-grid" onSubmit={handleSubmit}>
         <div className="form-row">
           <label className="form-label">Title</label>
@@ -1241,6 +1306,23 @@ function NewBetForm({ name, friends, onCreate }) {
         ) : (
           <div className="form-row">
             <label className="form-label">Participants</label>
+            <div className="card" style={{ background: "var(--card-2)", marginBottom: "10px" }}>
+              <label className="form-label">Set the same stake for everyone</label>
+              <div className="form-row row-inline">
+                <div className="form-row">
+                  <label className="form-label">Stake</label>
+                  <select className="form-select" value={defaultStakeType} onChange={e => setDefaultStakeType(e.target.value)}>
+                    <option value="cash">Cash ($)</option>
+                    <option value="beer">Beers</option>
+                  </select>
+                </div>
+                <div className="form-row">
+                  <label className="form-label">Amount</label>
+                  <input className="form-input" type="number" min="0" step="1" placeholder="e.g. 1" value={defaultStakeAmount} onChange={e => setDefaultStakeAmount(e.target.value)} />
+                </div>
+                <button type="button" className="btn btn-secondary btn-sm" style={{ flex: "none", alignSelf: "flex-end" }} onClick={applyStakeToAll}>Apply to Everyone</button>
+              </div>
+            </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
               {participants.map((p, i) => (
                 <ParticipantRowEditor key={p.id} participant={p} durationBet={durationBet} friends={friends} onChange={u => updateParticipant(i, u)} onRemove={() => removeParticipant(i)} canRemove={participants.length > 1} />
@@ -1252,7 +1334,8 @@ function NewBetForm({ name, friends, onCreate }) {
 
         {error && <div className="form-error">{error}</div>}
         <div className="form-actions">
-          <button type="submit" className="btn btn-primary">Create Draft Bet</button>
+          {isEdit && <button type="button" className="btn btn-secondary" onClick={onCancelEdit}>Cancel</button>}
+          <button type="submit" className="btn btn-primary">{isEdit ? "Save Changes" : "Create Draft Bet"}</button>
         </div>
       </form>
     </div>
@@ -1406,7 +1489,7 @@ function BetsList({ bets, onSelectBet, onGoToNewBet }) {
 // ============================================================
 // Bet detail -- slide-over with positions, lifecycle actions, comments
 // ============================================================
-function BetDetail({ bet, onClose, onSubmitResolution, onReviseResolution, onAddComment, onToggleSettle, onRequestLock, onRequestConfirmResolution, onRequestDelete }) {
+function BetDetail({ bet, onClose, onSubmitResolution, onReviseResolution, onAddComment, onToggleSettle, onRequestLock, onRequestConfirmResolution, onRequestDelete, onEdit }) {
   const [commentText, setCommentText] = React.useState("");
   const [resultDraft, setResultDraft] = React.useState("");
   const [actualDateDraft, setActualDateDraft] = React.useState(() => new Date().toISOString().slice(0, 10));
@@ -1601,7 +1684,10 @@ function BetDetail({ bet, onClose, onSubmitResolution, onReviseResolution, onAdd
           <div className="detail-section">
             <div className="form-actions" style={{ justifyContent: "flex-start" }}>
               {bet.status === "draft" && (
-                <button className="btn btn-primary" onClick={() => onRequestLock(bet.id)}>Lock Bet</button>
+                <React.Fragment>
+                  <button className="btn btn-secondary" onClick={() => onEdit(bet.id)}>Edit Bet</button>
+                  <button className="btn btn-primary" onClick={() => onRequestLock(bet.id)}>Lock Bet</button>
+                </React.Fragment>
               )}
               {bet.status === "resolved-pending" && (
                 <React.Fragment>
