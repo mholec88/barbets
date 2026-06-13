@@ -1,0 +1,1690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Barbets</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+
+// ============================================================
+// USER CONFIG -- edit these before using with your friend group
+// ============================================================
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyDL6EXOBAOD5mXd_tD6i-ttgbBl9S5ErXI",
+  authDomain: "barbets-f400e.firebaseapp.com",
+  projectId: "barbets-f400e",
+  storageBucket: "barbets-f400e.firebasestorage.app",
+  messagingSenderId: "660310232252",
+  appId: "1:660310232252:web:bda9a6da90b1862c8ad4b9",
+};
+const GROUP_CODE = "barbets";
+const ADMIN_PIN = "1234";
+const FRIENDS = ["Mike", "Chris", "Tim", "Troy", "Ryan", "Bill B", "Bill C", "Sean"]; // edit to match your group (<20 names)
+const USE_LOCAL_FALLBACK = false; // now using Firestore (barbets-f400e)
+// ============================================================
+
+const CATEGORIES = ["Sports", "Pop Culture", "Weekly AI"];
+
+const CATEGORY_META = {
+  "Sports": { label: "Sports", className: "bet-cat-sports" },
+  "Pop Culture": { label: "Pop Culture", className: "bet-cat-pop-culture" },
+  "Weekly AI": { label: "Weekly AI", className: "bet-cat-weekly-ai" },
+};
+
+const STATUS_META = {
+  "draft": { label: "Draft", className: "bet-status-draft" },
+  "locked": { label: "Locked", className: "bet-status-locked" },
+  "resolved-pending": { label: "Pending Confirm", className: "bet-status-resolved-pending" },
+  "resolved": { label: "Resolved", className: "bet-status-resolved" },
+};
+
+const TABS = [
+  { id: "activity", label: "Activity" },
+  { id: "bets", label: "Bets" },
+  { id: "new", label: "New Bet" },
+  { id: "leaderboard", label: "Leaderboard" },
+];
+
+// Drop images named banner1.png/.jpg through banner{BANNER_SLOT_COUNT}.png/.jpg
+// into the images/ folder to show them in the header banner. Any slot/extension
+// that doesn't exist is skipped silently, so use as many or as few as you want.
+const BANNER_SLOT_COUNT = 10;
+const BANNER_EXTENSIONS = ["png", "jpg"];
+
+// Seed data for local testing -- one wager-mode bet, one duration pool bet
+const SEED_BETS = [
+  {
+    id: "seed1",
+    title: "Cowboys vs Broncos: More Wins in 2026",
+    description: "Whoever's team has more regular-season wins by the end of the year wins the bet.",
+    category: "Sports",
+    mode: "wager",
+    durationBet: false,
+    anchorDate: null,
+    status: "locked",
+    outcome: null,
+    createdAt: "2026-05-01T14:00:00.000Z",
+    createdBy: "Mike",
+    lockedAt: "2026-05-02T10:00:00.000Z",
+    resolvedAt: null,
+    comments: [
+      { name: "Chris", text: "Cowboys don't stand a chance.", ts: "2026-05-03T18:30:00.000Z" }
+    ],
+    wagers: [
+      { id: "w1", stakeType: "cash", amount: 50, sideA: { name: "Mike", label: "Cowboys" }, sideB: { name: "Chris", label: "Broncos" }, settledA: false, settledB: false },
+      { id: "w2", stakeType: "cash", amount: 100, sideA: { name: "Mike", label: "Cowboys" }, sideB: { name: "Tim", label: "Broncos" }, settledA: false, settledB: false }
+    ],
+    participants: null
+  },
+  {
+    id: "seed2",
+    title: "How Long Will Taylor & Travis Last?",
+    description: "Guess the range (days since the engagement announcement) that covers how long they stay together. Closest range wins the pot.",
+    category: "Pop Culture",
+    mode: "pool",
+    durationBet: true,
+    anchorDate: "2025-11-25",
+    status: "locked",
+    outcome: null,
+    createdAt: "2025-11-20T12:00:00.000Z",
+    createdBy: "Mike",
+    lockedAt: "2025-11-25T09:00:00.000Z",
+    resolvedAt: null,
+    comments: [],
+    wagers: null,
+    participants: [
+      { name: "Mike", guess: { minDays: 0, maxDays: 180 }, stakeType: "beer", stakeAmount: 6, settled: false },
+      { name: "Chris", guess: { minDays: 181, maxDays: 365 }, stakeType: "beer", stakeAmount: 6, settled: false },
+      { name: "Troy", guess: { minDays: 366, maxDays: 730 }, stakeType: "beer", stakeAmount: 6, settled: false },
+      { name: "Ryan", guess: { minDays: 731, maxDays: null }, stakeType: "beer", stakeAmount: 6, settled: false }
+    ]
+  }
+];
+
+// ============================================================
+// Helpers
+// ============================================================
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function formatDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatDateTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+// ---- Duration bet logic (shared by DurationProgress, BetDetail, Leaderboard) ----
+function daysBetween(isoDate, now) {
+  return Math.floor((now - new Date(isoDate + "T00:00:00")) / 86400000);
+}
+
+function withinRange(days, min, max) {
+  if (min != null && days < min) return false;
+  if (max != null && days > max) return false;
+  return true;
+}
+
+function formatGuess(bet, guess) {
+  if (bet.durationBet) {
+    const min = guess.minDays;
+    const max = guess.maxDays;
+    if (max == null) return `${min}+ days`;
+    return `${min}-${max} days`;
+  }
+  return guess;
+}
+
+// ---- Winner determination (shared by BetDetail and Leaderboard) ----
+function isWagerWinner(wager, outcome, side) {
+  if (!outcome || !outcome.result) return false;
+  const label = side === "A" ? wager.sideA.label : wager.sideB.label;
+  return label.trim().toLowerCase() === outcome.result.trim().toLowerCase();
+}
+
+function isParticipantWinner(bet, participant) {
+  if (!bet.outcome) return false;
+  if (bet.durationBet) {
+    if (bet.outcome.actualDays == null) return false;
+    return withinRange(bet.outcome.actualDays, participant.guess.minDays, participant.guess.maxDays);
+  }
+  if (!bet.outcome.result) return false;
+  return String(participant.guess).trim().toLowerCase() === bet.outcome.result.trim().toLowerCase();
+}
+
+// ---- Leaderboard math ----
+function computeLeaderboard(bets, friends) {
+  const stats = {};
+  friends.forEach(f => {
+    stats[f] = { name: f, netCash: 0, netBeers: 0, wins: 0, losses: 0, pending: 0 };
+  });
+
+  function ensure(name) {
+    if (!stats[name]) stats[name] = { name, netCash: 0, netBeers: 0, wins: 0, losses: 0, pending: 0 };
+    return stats[name];
+  }
+
+  function addNet(s, stakeType, amount) {
+    if (stakeType === "cash") s.netCash += amount;
+    else s.netBeers += amount;
+  }
+
+  bets.filter(b => b.status === "resolved").forEach(bet => {
+    if (bet.mode === "wager") {
+      (bet.wagers || []).forEach(w => {
+        const winA = isWagerWinner(w, bet.outcome, "A");
+        const winB = isWagerWinner(w, bet.outcome, "B");
+        const a = ensure(w.sideA.name);
+        const b = ensure(w.sideB.name);
+        if (winA) {
+          a.wins += 1; b.losses += 1;
+          addNet(a, w.stakeType, w.amount);
+          addNet(b, w.stakeType, -w.amount);
+        } else if (winB) {
+          b.wins += 1; a.losses += 1;
+          addNet(b, w.stakeType, w.amount);
+          addNet(a, w.stakeType, -w.amount);
+        }
+        if (!w.settledA || !w.settledB) {
+          a.pending += 1;
+          b.pending += 1;
+        }
+      });
+    } else {
+      const winners = (bet.participants || []).filter(p => isParticipantWinner(bet, p));
+      ["cash", "beer"].forEach(stakeType => {
+        const participantsOfType = (bet.participants || []).filter(p => p.stakeType === stakeType);
+        if (participantsOfType.length === 0) return;
+        const pot = participantsOfType.reduce((sum, p) => sum + p.stakeAmount, 0);
+        const winnersOfType = winners.filter(p => p.stakeType === stakeType);
+        const shareEach = winnersOfType.length > 0 ? pot / winnersOfType.length : 0;
+        participantsOfType.forEach(p => {
+          const s = ensure(p.name);
+          const isWinner = winnersOfType.includes(p);
+          const net = isWinner ? (shareEach - p.stakeAmount) : -p.stakeAmount;
+          addNet(s, stakeType, net);
+          if (isWinner) s.wins += 1; else s.losses += 1;
+          if (!p.settled) s.pending += 1;
+        });
+      });
+    }
+  });
+
+  return Object.values(stats).sort((a, b) => b.netCash - a.netCash);
+}
+
+// ---- Activity feed (derived from bet lifecycle timestamps + comments) ----
+function buildActivityFeed(bets) {
+  const entries = [];
+  bets.forEach(bet => {
+    if (bet.createdAt) {
+      entries.push({ id: bet.id + "-created", ts: bet.createdAt, betId: bet.id, icon: "🆕", title: `${bet.createdBy} created a new bet`, sub: bet.title });
+    }
+    if (bet.lockedAt) {
+      entries.push({ id: bet.id + "-locked", ts: bet.lockedAt, betId: bet.id, icon: "🔒", title: "Bet locked in", sub: bet.title });
+    }
+    if (bet.resolvedAt) {
+      entries.push({ id: bet.id + "-resolved", ts: bet.resolvedAt, betId: bet.id, icon: "✅", title: "Bet resolved", sub: bet.title });
+    }
+    (bet.comments || []).forEach((c, i) => {
+      entries.push({ id: bet.id + "-comment-" + i, ts: c.ts, betId: bet.id, icon: "💬", title: `${c.name} commented`, sub: `"${c.text}" -- ${bet.title}` });
+    });
+  });
+  return entries.sort((a, b) => new Date(b.ts) - new Date(a.ts));
+}
+
+function formatNet(val, kind) {
+  const rounded = Math.round(val * 100) / 100;
+  const abs = Math.abs(rounded);
+  const sign = rounded > 0 ? "+" : rounded < 0 ? "-" : "";
+  const cls = rounded > 0 ? "value-pos" : rounded < 0 ? "value-neg" : "value-zero";
+  const text = kind === "cash" ? `${sign}$${abs}` : `${sign}${abs} 🍺`;
+  return <span className={cls}>{text}</span>;
+}
+
+// ---- Calendar export (.ics) -- works with Google/Apple/Outlook calendars ----
+function icsEscape(text) {
+  return String(text || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+}
+
+function addDaysToISODate(isoDate, days) {
+  const d = new Date(isoDate + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function buildICS({ title, description, date }) {
+  const dtStart = date.replace(/-/g, "");
+  const dtEnd = addDaysToISODate(date, 1).replace(/-/g, "");
+  const dtStamp = nowIso().replace(/[-:]/g, "").split(".")[0] + "Z";
+  return [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Barbets//EN",
+    "CALSCALE:GREGORIAN",
+    "BEGIN:VEVENT",
+    "UID:" + uid() + "@barbets",
+    "DTSTAMP:" + dtStamp,
+    "DTSTART;VALUE=DATE:" + dtStart,
+    "DTEND;VALUE=DATE:" + dtEnd,
+    "SUMMARY:" + icsEscape(title),
+    "DESCRIPTION:" + icsEscape(description),
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\r\n");
+}
+
+function downloadICS(filename, content) {
+  const blob = new Blob([content], { type: "text/calendar;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ============================================================
+// Data layer -- branches on USE_LOCAL_FALLBACK
+// ============================================================
+let db = null;
+if (!USE_LOCAL_FALLBACK) {
+  firebase.initializeApp(FIREBASE_CONFIG);
+  db = firebase.firestore();
+}
+
+const LOCAL_BETS_KEY = "barbets_bets";
+const localListeners = new Set();
+
+function loadLocalBets() {
+  try {
+    const raw = localStorage.getItem(LOCAL_BETS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error("Failed to parse local bets", e);
+  }
+  const seeded = SEED_BETS.map(b => ({ ...b }));
+  localStorage.setItem(LOCAL_BETS_KEY, JSON.stringify(seeded));
+  return seeded;
+}
+
+function saveLocalBets(bets) {
+  localStorage.setItem(LOCAL_BETS_KEY, JSON.stringify(bets));
+}
+
+function notifyLocalListeners() {
+  const bets = loadLocalBets();
+  localListeners.forEach(cb => cb(bets));
+}
+
+function subscribeBets(callback) {
+  if (USE_LOCAL_FALLBACK) {
+    callback(loadLocalBets());
+    localListeners.add(callback);
+    return () => localListeners.delete(callback);
+  }
+  return db.collection("bets").onSnapshot(snap => {
+    const bets = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    callback(bets);
+  });
+}
+
+function saveBet(bet) {
+  if (USE_LOCAL_FALLBACK) {
+    const bets = loadLocalBets();
+    bets.push(bet);
+    saveLocalBets(bets);
+    notifyLocalListeners();
+    return Promise.resolve();
+  }
+  return db.collection("bets").doc(bet.id).set(bet);
+}
+
+function updateBet(id, patch) {
+  if (USE_LOCAL_FALLBACK) {
+    const bets = loadLocalBets();
+    const idx = bets.findIndex(b => b.id === id);
+    if (idx !== -1) bets[idx] = { ...bets[idx], ...patch };
+    saveLocalBets(bets);
+    notifyLocalListeners();
+    return Promise.resolve();
+  }
+  return db.collection("bets").doc(id).update(patch);
+}
+
+function addCommentToBet(id, comment) {
+  if (USE_LOCAL_FALLBACK) {
+    const bets = loadLocalBets();
+    const idx = bets.findIndex(b => b.id === id);
+    if (idx !== -1) {
+      const comments = bets[idx].comments || [];
+      bets[idx] = { ...bets[idx], comments: [...comments, comment] };
+    }
+    saveLocalBets(bets);
+    notifyLocalListeners();
+    return Promise.resolve();
+  }
+  return db.collection("bets").doc(id).update({
+    comments: firebase.firestore.FieldValue.arrayUnion(comment),
+  });
+}
+
+// ============================================================
+// Friends list -- FRIENDS constant plus anyone added via "+ Add Friend"
+// ============================================================
+const LOCAL_FRIENDS_KEY = "barbets_extra_friends";
+const friendListeners = new Set();
+
+function loadExtraFriends() {
+  try {
+    const raw = localStorage.getItem(LOCAL_FRIENDS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error("Failed to parse extra friends", e);
+  }
+  return [];
+}
+
+function saveExtraFriends(names) {
+  localStorage.setItem(LOCAL_FRIENDS_KEY, JSON.stringify(names));
+}
+
+function subscribeFriends(callback) {
+  if (USE_LOCAL_FALLBACK) {
+    callback(loadExtraFriends());
+    friendListeners.add(callback);
+    return () => friendListeners.delete(callback);
+  }
+  return db.collection("meta").doc("friends").onSnapshot(doc => {
+    callback((doc.data() && doc.data().names) || []);
+  });
+}
+
+function addFriend(newName) {
+  if (USE_LOCAL_FALLBACK) {
+    const names = loadExtraFriends();
+    if (!names.includes(newName)) {
+      names.push(newName);
+      saveExtraFriends(names);
+      friendListeners.forEach(cb => cb(names));
+    }
+    return Promise.resolve();
+  }
+  return db.collection("meta").doc("friends").set({
+    names: firebase.firestore.FieldValue.arrayUnion(newName),
+  }, { merge: true });
+}
+
+// ============================================================
+// Styles
+// ============================================================
+const CSS = `
+:root {
+  --bg: #1A1A1A;
+  --card: #2A2A2A;
+  --card-2: #333333;
+  --accent: #F4A623;
+  --text: #F0F0F0;
+  --text-dim: #A0A0A0;
+  --border: #3F3F3F;
+  --green: #4CAF50;
+  --red: #E5534B;
+  --blue: #4A90D9;
+  --yellow: #E8C547;
+  --gray: #6B6B6B;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4 { font-family: 'Oswald', sans-serif; font-weight: 600; letter-spacing: 0.02em; }
+a { color: var(--accent); text-decoration: none; }
+
+/* Layout */
+.app-shell { min-height: 100vh; display: flex; flex-direction: column; }
+.app-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--card);
+}
+.app-title { font-family: 'Oswald', sans-serif; font-size: 24px; font-weight: 700; color: var(--accent); letter-spacing: 0.08em; text-transform: uppercase; }
+.app-user { display: flex; align-items: center; gap: 12px; font-size: 14px; color: var(--text-dim); }
+.app-user .switch-link { font-size: 12px; color: var(--text-dim); border-bottom: 1px dotted var(--text-dim); cursor: pointer; background: none; border-top: none; border-left: none; border-right: none; font-family: 'Inter', sans-serif; padding: 0; }
+.app-user .switch-link:hover { color: var(--accent); border-color: var(--accent); }
+
+.header-banner { display: flex; align-items: center; gap: 14px; padding: 8px 24px; background: var(--card); border-bottom: 1px solid var(--border); overflow-x: auto; }
+.header-banner-img { height: 36px; width: auto; object-fit: contain; flex-shrink: 0; }
+
+.tab-bar { display: flex; gap: 4px; padding: 0 24px; background: var(--card); border-bottom: 1px solid var(--border); overflow-x: auto; }
+.tab-btn {
+  padding: 12px 18px; font-family: 'Oswald', sans-serif; font-size: 13px; font-weight: 600;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); background: none;
+  border: none; border-bottom: 3px solid transparent; cursor: pointer; white-space: nowrap;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.app-main { flex: 1; padding: 24px; max-width: 1100px; width: 100%; margin: 0 auto; }
+
+/* Cards */
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+.card + .card { margin-top: 16px; }
+
+/* Buttons */
+.btn {
+  font-family: 'Oswald', sans-serif; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  font-size: 13px; padding: 10px 20px; border-radius: 6px; border: none; cursor: pointer; transition: filter 0.15s;
+}
+.btn:hover { filter: brightness(1.1); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--accent); color: #1A1A1A; }
+.btn-secondary { background: var(--card-2); color: var(--text); border: 1px solid var(--border); }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-sm { padding: 6px 12px; font-size: 11px; }
+.btn-block { width: 100%; }
+.btn-link { background: none; border: none; color: var(--accent); font-family: 'Inter', sans-serif; font-size: 13px; cursor: pointer; padding: 0; text-decoration: underline; }
+
+/* Forms */
+.form-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+.form-modal { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; max-width: 420px; width: 100%; max-height: 90vh; overflow-y: auto; }
+.form-modal h3 { margin-bottom: 12px; }
+.form-grid { display: flex; flex-direction: column; gap: 14px; }
+.form-row { display: flex; flex-direction: column; gap: 6px; }
+.form-row.row-inline { flex-direction: row; gap: 10px; align-items: flex-end; }
+.form-row.row-inline > * { flex: 1; }
+.form-label { font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+.form-input, .form-select, .form-textarea {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px;
+  color: var(--text); font-size: 14px; font-family: 'Inter', sans-serif; width: 100%;
+}
+.form-input:focus, .form-select:focus, .form-textarea:focus { outline: none; border-color: var(--accent); }
+.form-textarea { resize: vertical; min-height: 70px; }
+.form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 6px; }
+.form-error { color: var(--red); font-size: 13px; }
+
+/* Badges */
+.bet-badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 4px; letter-spacing: 0.06em; text-transform: uppercase; font-family: 'Oswald', sans-serif; }
+.bet-status-draft            { background: #3F3F3F; color: #CFCFCF; }
+.bet-status-locked           { background: rgba(74,144,217,0.18); color: #7AB6F0; border: 1px solid #4A90D9; }
+.bet-status-resolved-pending { background: rgba(232,197,71,0.18); color: #E8C547; border: 1px solid #E8C547; }
+.bet-status-resolved         { background: rgba(76,175,80,0.18); color: #7ED182; border: 1px solid #4CAF50; }
+.bet-cat-sports      { background: rgba(74,144,217,0.15); color: #7AB6F0; }
+.bet-cat-pop-culture { background: rgba(244,166,35,0.15); color: #F4A623; }
+.bet-cat-weekly-ai   { background: rgba(155,89,182,0.15); color: #C99BE0; }
+
+/* Bet cards / lists */
+.bet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); gap: 16px; }
+.bet-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; cursor: pointer; transition: border-color 0.15s, transform 0.1s; display: flex; flex-direction: column; gap: 10px; }
+.bet-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.bet-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.bet-card-title { font-family: 'Oswald', sans-serif; font-size: 16px; font-weight: 600; }
+.bet-card-desc { font-size: 13px; color: var(--text-dim); line-height: 1.4; }
+.bet-card-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.bet-card-meta { font-size: 12px; color: var(--text-dim); display: flex; justify-content: space-between; margin-top: auto; }
+
+.filter-bar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+.filter-bar select { width: auto; }
+
+/* Position rows (wager / participant) */
+.wager-row, .participant-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+}
+.wager-row.win, .participant-row.win { border-color: var(--green); background: rgba(76,175,80,0.08); }
+.position-names { font-weight: 600; font-size: 14px; }
+.position-detail { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.position-stake { font-family: 'Oswald', sans-serif; font-weight: 700; color: var(--accent); white-space: nowrap; }
+.position-left { flex: 1; }
+.position-right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+
+.settle-toggle { font-size: 11px; padding: 5px 10px; border-radius: 5px; border: 1px solid var(--border); background: var(--card-2); color: var(--text-dim); cursor: pointer; font-family: 'Oswald', sans-serif; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
+.settle-toggle.settled { background: rgba(76,175,80,0.15); border-color: var(--green); color: #7ED182; }
+
+/* Duration progress */
+.duration-progress { margin-top: 6px; }
+.duration-progress-track { height: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.duration-progress-fill { height: 100%; background: var(--accent); transition: width 0.3s; }
+.duration-progress-label { font-size: 12px; color: var(--text-dim); margin-top: 6px; display: flex; justify-content: space-between; }
+.duration-leader { font-family: 'Oswald', sans-serif; font-weight: 600; color: var(--accent); font-size: 13px; margin-top: 4px; }
+
+/* Activity feed */
+.activity-list { display: flex; flex-direction: column; gap: 10px; }
+.activity-item { display: flex; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); cursor: pointer; transition: border-color 0.15s; }
+.activity-item:hover { border-color: var(--accent); }
+.activity-icon { font-size: 20px; line-height: 1; }
+.activity-body { flex: 1; }
+.activity-title { font-size: 14px; font-weight: 600; }
+.activity-sub { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.activity-time { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+
+/* Leaderboard */
+.leaderboard-table { width: 100%; border-collapse: collapse; }
+.leaderboard-table th, .leaderboard-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 14px; }
+.leaderboard-table th { font-family: 'Oswald', sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); }
+.leaderboard-table .rank { font-family: 'Oswald', sans-serif; font-weight: 700; color: var(--accent); }
+.value-pos { color: var(--green); font-weight: 600; }
+.value-neg { color: var(--red); font-weight: 600; }
+.value-zero { color: var(--text-dim); }
+
+/* Landing */
+.landing-shell { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.landing-card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 36px; max-width: 420px; width: 100%; text-align: center; }
+.landing-title { font-family: 'Oswald', sans-serif; font-size: 32px; font-weight: 700; color: var(--accent); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 6px; }
+.landing-sub { color: var(--text-dim); font-size: 14px; margin-bottom: 24px; }
+.friend-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 18px; }
+.friend-pick-btn { padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-family: 'Oswald', sans-serif; font-weight: 600; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.friend-pick-btn:hover { border-color: var(--accent); background: var(--card-2); }
+
+/* Empty state */
+.empty-state { text-align: center; padding: 40px 20px; color: var(--text-dim); }
+.empty-state-icon { font-size: 40px; margin-bottom: 10px; }
+
+/* Comments */
+.comment-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.comment-item { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.comment-head { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+.comment-name { font-weight: 600; color: var(--text); }
+
+/* Detail overlay */
+.detail-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; justify-content: flex-end; z-index: 90; }
+.detail-panel { background: var(--bg); border-left: 1px solid var(--border); width: 520px; max-width: 100%; height: 100%; overflow-y: auto; padding: 24px; }
+.detail-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; gap: 10px; }
+.detail-close { background: none; border: none; color: var(--text-dim); font-size: 22px; cursor: pointer; line-height: 1; }
+.detail-close:hover { color: var(--text); }
+.detail-section { margin-top: 20px; }
+.detail-section h4 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 10px; }
+
+/* Scrollable wrapper for wide tables on small screens */
+.table-scroll { overflow-x: auto; }
+
+@media (max-width: 640px) {
+  .app-header { padding: 12px 16px; }
+  .header-banner { padding: 8px 16px; }
+  .app-main { padding: 14px; }
+  .tab-bar { padding: 0 8px; }
+  .detail-panel { width: 100%; }
+  .friend-grid { grid-template-columns: 1fr; }
+  .form-row.row-inline { flex-direction: column; gap: 14px; }
+  .bet-grid { grid-template-columns: 1fr; }
+  .filter-bar .btn { margin-left: 0 !important; width: 100%; }
+}
+`;
+
+// ============================================================
+// Landing screen -- group code, then pick your name
+// ============================================================
+function LandingScreen({ onUnlock, friends, onAddFriend }) {
+  const [step, setStep] = React.useState(() =>
+    localStorage.getItem("barbets_unlocked") === "true" ? "name" : "code"
+  );
+  const [code, setCode] = React.useState("");
+  const [error, setError] = React.useState("");
+  const [addingFriend, setAddingFriend] = React.useState(false);
+  const [newFriendName, setNewFriendName] = React.useState("");
+
+  function handleCodeSubmit(e) {
+    e.preventDefault();
+    if (code.trim().toLowerCase() === GROUP_CODE.toLowerCase()) {
+      localStorage.setItem("barbets_unlocked", "true");
+      setError("");
+      setStep("name");
+    } else {
+      setError("Wrong code, try again.");
+    }
+  }
+
+  function handlePickName(friendName) {
+    localStorage.setItem("barbets_name", friendName);
+    onUnlock(friendName);
+  }
+
+  function handleAddFriendSubmit(e) {
+    e.preventDefault();
+    const trimmed = newFriendName.trim();
+    if (!trimmed) return;
+    onAddFriend(trimmed);
+    handlePickName(trimmed);
+  }
+
+  return (
+    <div className="landing-shell">
+      <div className="landing-card">
+        <div className="landing-title">Barbets</div>
+        {step === "code" ? (
+          <React.Fragment>
+            <div className="landing-sub">Enter the group code to get in.</div>
+            <form className="form-grid" onSubmit={handleCodeSubmit}>
+              <div className="form-row">
+                <input
+                  className="form-input"
+                  type="password"
+                  placeholder="Group code"
+                  value={code}
+                  onChange={e => setCode(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              {error && <div className="form-error">{error}</div>}
+              <button className="btn btn-primary btn-block" type="submit">Enter</button>
+            </form>
+          </React.Fragment>
+        ) : (
+          <React.Fragment>
+            <div className="landing-sub">Who are you?</div>
+            <div className="friend-grid">
+              {friends.map(f => (
+                <button key={f} className="friend-pick-btn" onClick={() => handlePickName(f)}>{f}</button>
+              ))}
+            </div>
+            {addingFriend ? (
+              <form className="form-row row-inline" style={{ marginTop: "12px" }} onSubmit={handleAddFriendSubmit}>
+                <input
+                  className="form-input"
+                  placeholder="Your name"
+                  value={newFriendName}
+                  onChange={e => setNewFriendName(e.target.value)}
+                  autoFocus
+                />
+                <button type="submit" className="btn btn-secondary" style={{ flex: "none" }}>Add</button>
+              </form>
+            ) : (
+              <button type="button" className="btn-link" style={{ marginTop: "14px" }} onClick={() => setAddingFriend(true)}>+ Add Friend</button>
+            )}
+          </React.Fragment>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// App shell (landing screen + main app -- built out in later phases)
+// ============================================================
+function App() {
+  const [unlocked, setUnlocked] = React.useState(() => localStorage.getItem("barbets_unlocked") === "true");
+  const [name, setName] = React.useState(() => localStorage.getItem("barbets_name") || "");
+  const [extraFriends, setExtraFriends] = React.useState([]);
+
+  React.useEffect(() => {
+    const unsubscribe = subscribeFriends(setExtraFriends);
+    return () => { if (typeof unsubscribe === "function") unsubscribe(); };
+  }, []);
+
+  const friends = [...FRIENDS, ...extraFriends];
+
+  function handleUnlock(pickedName) {
+    setUnlocked(true);
+    setName(pickedName);
+  }
+
+  function handleAddFriend(newName) {
+    addFriend(newName);
+  }
+
+  function handleSwitchUser() {
+    localStorage.removeItem("barbets_unlocked");
+    localStorage.removeItem("barbets_name");
+    setUnlocked(false);
+    setName("");
+  }
+
+  if (!unlocked || !name) {
+    return <LandingScreen onUnlock={handleUnlock} friends={friends} onAddFriend={handleAddFriend} />;
+  }
+
+  return <BarbetsApp name={name} friends={friends} onSwitchUser={handleSwitchUser} />;
+}
+
+// ============================================================
+// Header banner -- shows images/banner{N}.{png,jpg} for any N/extension
+// that exists; missing files are removed from the strip silently.
+// ============================================================
+function BannerImage({ slot, onExhausted }) {
+  const [extIndex, setExtIndex] = React.useState(0);
+
+  if (extIndex >= BANNER_EXTENSIONS.length) return null;
+
+  function handleError() {
+    if (extIndex + 1 >= BANNER_EXTENSIONS.length) onExhausted();
+    setExtIndex(i => i + 1);
+  }
+
+  return (
+    <img
+      src={`images/banner${slot}.${BANNER_EXTENSIONS[extIndex]}`}
+      alt=""
+      className="header-banner-img"
+      onError={handleError}
+    />
+  );
+}
+
+function HeaderBanner() {
+  const [exhaustedCount, setExhaustedCount] = React.useState(0);
+
+  if (exhaustedCount >= BANNER_SLOT_COUNT) return null;
+
+  const slots = Array.from({ length: BANNER_SLOT_COUNT }, (_, i) => i + 1);
+
+  return (
+    <div className="header-banner">
+      {slots.map(slot => (
+        <BannerImage key={slot} slot={slot} onExhausted={() => setExhaustedCount(c => c + 1)} />
+      ))}
+    </div>
+  );
+}
+
+function BarbetsApp({ name, friends, onSwitchUser }) {
+  const [bets, setBets] = React.useState([]);
+  const [activeTab, setActiveTab] = React.useState("activity");
+  const [selectedBetId, setSelectedBetId] = React.useState(null);
+  const [pinAction, setPinAction] = React.useState(null); // { type: "lock" | "resolve", betId }
+
+  React.useEffect(() => {
+    const unsubscribe = subscribeBets(setBets);
+    return () => { if (typeof unsubscribe === "function") unsubscribe(); };
+  }, []);
+
+  const selectedBet = bets.find(b => b.id === selectedBetId) || null;
+
+  function handleCreateBet(bet) {
+    saveBet(bet).then(() => setActiveTab("bets"));
+  }
+
+  function handleSelectBet(betId) {
+    setSelectedBetId(betId);
+  }
+
+  function handleCloseDetail() {
+    setSelectedBetId(null);
+  }
+
+  function handleRequestLock(betId) {
+    setPinAction({ type: "lock", betId });
+  }
+
+  function handleRequestConfirmResolution(betId) {
+    setPinAction({ type: "resolve", betId });
+  }
+
+  function handlePinConfirm() {
+    if (!pinAction) return;
+    if (pinAction.type === "lock") {
+      updateBet(pinAction.betId, { status: "locked", lockedAt: nowIso() });
+    } else if (pinAction.type === "resolve") {
+      updateBet(pinAction.betId, { status: "resolved", resolvedAt: nowIso() });
+    }
+    setPinAction(null);
+  }
+
+  function handlePinCancel() {
+    setPinAction(null);
+  }
+
+  function handleSubmitResolution(betId, outcome) {
+    updateBet(betId, { status: "resolved-pending", outcome });
+  }
+
+  function handleReviseResolution(betId) {
+    updateBet(betId, { status: "locked", outcome: null });
+  }
+
+  function handleAddComment(betId, text) {
+    addCommentToBet(betId, { name, text, ts: nowIso() });
+  }
+
+  function handleToggleSettle(bet, kind, idx, side) {
+    if (kind === "wager") {
+      const wagers = bet.wagers.map((w, i) => {
+        if (i !== idx) return w;
+        return side === "A" ? { ...w, settledA: !w.settledA } : { ...w, settledB: !w.settledB };
+      });
+      updateBet(bet.id, { wagers });
+    } else {
+      const participants = bet.participants.map((p, i) => i === idx ? { ...p, settled: !p.settled } : p);
+      updateBet(bet.id, { participants });
+    }
+  }
+
+  return (
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="app-title">Barbets</div>
+        <div className="app-user">
+          <span>{name}</span>
+          <button className="switch-link" onClick={onSwitchUser}>switch user</button>
+        </div>
+      </header>
+      <HeaderBanner />
+      <nav className="tab-bar">
+        {TABS.map(tab => (
+          <button
+            key={tab.id}
+            className={"tab-btn" + (activeTab === tab.id ? " active" : "")}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+      <main className="app-main">
+        {activeTab === "activity" && <ActivityFeed bets={bets} onSelectBet={handleSelectBet} />}
+        {activeTab === "bets" && (
+          <BetsList bets={bets} onSelectBet={handleSelectBet} onGoToNewBet={() => setActiveTab("new")} />
+        )}
+        {activeTab === "new" && (
+          <NewBetForm name={name} friends={friends} onCreate={handleCreateBet} />
+        )}
+        {activeTab === "leaderboard" && <Leaderboard bets={bets} friends={friends} />}
+      </main>
+
+      {selectedBet && (
+        <BetDetail
+          bet={selectedBet}
+          onClose={handleCloseDetail}
+          onSubmitResolution={handleSubmitResolution}
+          onReviseResolution={handleReviseResolution}
+          onAddComment={handleAddComment}
+          onToggleSettle={handleToggleSettle}
+          onRequestLock={handleRequestLock}
+          onRequestConfirmResolution={handleRequestConfirmResolution}
+        />
+      )}
+
+      {pinAction && (
+        <PinModal
+          title={pinAction.type === "lock" ? "Lock This Bet" : "Confirm Resolution"}
+          message={pinAction.type === "lock"
+            ? "Enter the admin PIN to lock this bet. Once locked, the terms can't be changed."
+            : "Enter the admin PIN to confirm this outcome and settle the bet."}
+          onConfirm={handlePinConfirm}
+          onCancel={handlePinCancel}
+        />
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// New Bet form -- wager mode (1-on-1 / many-to-one) and pool mode
+// (including the "duration" sub-type with day-range guesses)
+// ============================================================
+const DURATION_PRESETS = [
+  { label: "0-30 days", minDays: 0, maxDays: 30 },
+  { label: "1-3 months", minDays: 31, maxDays: 90 },
+  { label: "3-6 months", minDays: 91, maxDays: 180 },
+  { label: "6-12 months", minDays: 181, maxDays: 365 },
+  { label: "1-2 years", minDays: 366, maxDays: 730 },
+  { label: "2+ years", minDays: 731, maxDays: null },
+];
+
+function emptyWager(defaultName) {
+  return { id: uid(), stakeType: "cash", amount: "", sideA: { name: defaultName, label: "" }, sideB: { name: "", label: "" } };
+}
+
+function emptyParticipant(defaultName, durationBet) {
+  return {
+    id: uid(),
+    name: defaultName,
+    guess: durationBet ? { minDays: 0, maxDays: null } : "",
+    stakeType: "cash",
+    stakeAmount: "",
+  };
+}
+
+function WagerRowEditor({ wager, friends, onChange, onRemove, canRemove }) {
+  function update(patch) { onChange({ ...wager, ...patch }); }
+  function updateSide(side, patch) { onChange({ ...wager, [side]: { ...wager[side], ...patch } }); }
+  return (
+    <div className="card" style={{ background: "var(--card-2)" }}>
+      <div className="form-row row-inline">
+        <div className="form-row">
+          <label className="form-label">Side A</label>
+          <select className="form-select" value={wager.sideA.name} onChange={e => updateSide("sideA", { name: e.target.value })}>
+            <option value="">Select...</option>
+            {friends.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+        </div>
+        <div className="form-row">
+          <label className="form-label">Side A picks</label>
+          <input className="form-input" placeholder="e.g. Cowboys" value={wager.sideA.label} onChange={e => updateSide("sideA", { label: e.target.value })} />
+        </div>
+      </div>
+      <div className="form-row row-inline">
+        <div className="form-row">
+          <label className="form-label">Side B</label>
+          <select className="form-select" value={wager.sideB.name} onChange={e => updateSide("sideB", { name: e.target.value })}>
+            <option value="">Select...</option>
+            {friends.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+        </div>
+        <div className="form-row">
+          <label className="form-label">Side B picks</label>
+          <input className="form-input" placeholder="e.g. Broncos" value={wager.sideB.label} onChange={e => updateSide("sideB", { label: e.target.value })} />
+        </div>
+      </div>
+      <div className="form-row row-inline">
+        <div className="form-row">
+          <label className="form-label">Stake</label>
+          <select className="form-select" value={wager.stakeType} onChange={e => update({ stakeType: e.target.value })}>
+            <option value="cash">Cash ($)</option>
+            <option value="beer">Beers</option>
+          </select>
+        </div>
+        <div className="form-row">
+          <label className="form-label">Amount</label>
+          <input className="form-input" type="number" min="0" step="1" value={wager.amount} onChange={e => update({ amount: e.target.value })} />
+        </div>
+      </div>
+      {canRemove && <button type="button" className="btn-link" onClick={onRemove}>Remove this wager</button>}
+    </div>
+  );
+}
+
+function ParticipantRowEditor({ participant, durationBet, friends, onChange, onRemove, canRemove }) {
+  function update(patch) { onChange({ ...participant, ...patch }); }
+  function updateGuess(patch) { onChange({ ...participant, guess: { ...participant.guess, ...patch } }); }
+  return (
+    <div className="card" style={{ background: "var(--card-2)" }}>
+      <div className="form-row row-inline">
+        <div className="form-row">
+          <label className="form-label">Name</label>
+          <select className="form-select" value={participant.name} onChange={e => update({ name: e.target.value })}>
+            <option value="">Select...</option>
+            {friends.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+        </div>
+        <div className="form-row">
+          <label className="form-label">Stake</label>
+          <select className="form-select" value={participant.stakeType} onChange={e => update({ stakeType: e.target.value })}>
+            <option value="cash">Cash ($)</option>
+            <option value="beer">Beers</option>
+          </select>
+        </div>
+        <div className="form-row">
+          <label className="form-label">Amount</label>
+          <input className="form-input" type="number" min="0" step="1" value={participant.stakeAmount} onChange={e => update({ stakeAmount: e.target.value })} />
+        </div>
+      </div>
+      {durationBet ? (
+        <div className="form-row">
+          <label className="form-label">Guess (days from anchor date)</label>
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "8px" }}>
+            {DURATION_PRESETS.map(p => (
+              <button key={p.label} type="button" className="btn btn-secondary btn-sm" onClick={() => update({ guess: { minDays: p.minDays, maxDays: p.maxDays } })}>{p.label}</button>
+            ))}
+          </div>
+          <div className="form-row row-inline">
+            <div className="form-row">
+              <label className="form-label">Min days</label>
+              <input className="form-input" type="number" min="0" value={participant.guess.minDays === null ? "" : participant.guess.minDays} onChange={e => updateGuess({ minDays: e.target.value === "" ? 0 : Number(e.target.value) })} />
+            </div>
+            <div className="form-row">
+              <label className="form-label">Max days (blank = no limit)</label>
+              <input className="form-input" type="number" min="0" value={participant.guess.maxDays === null ? "" : participant.guess.maxDays} onChange={e => updateGuess({ maxDays: e.target.value === "" ? null : Number(e.target.value) })} />
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="form-row">
+          <label className="form-label">Guess</label>
+          <input className="form-input" placeholder="e.g. Under 6 months" value={participant.guess} onChange={e => update({ guess: e.target.value })} />
+        </div>
+      )}
+      {canRemove && <button type="button" className="btn-link" onClick={onRemove}>Remove this participant</button>}
+    </div>
+  );
+}
+
+function NewBetForm({ name, friends, onCreate }) {
+  const [title, setTitle] = React.useState("");
+  const [description, setDescription] = React.useState("");
+  const [category, setCategory] = React.useState(CATEGORIES[0]);
+  const [mode, setMode] = React.useState("wager");
+  const [durationBet, setDurationBet] = React.useState(false);
+  const [anchorDate, setAnchorDate] = React.useState(() => new Date().toISOString().slice(0, 10));
+  const [wagers, setWagers] = React.useState([emptyWager(name)]);
+  const [participants, setParticipants] = React.useState([emptyParticipant(name, false)]);
+  const [error, setError] = React.useState("");
+
+  function toggleDurationBet() {
+    const next = !durationBet;
+    setDurationBet(next);
+    setParticipants(participants.map(p => ({ ...p, guess: next ? { minDays: 0, maxDays: null } : "" })));
+  }
+
+  function updateWager(idx, updated) { setWagers(wagers.map((w, i) => i === idx ? updated : w)); }
+  function addWager() { setWagers([...wagers, emptyWager("")]); }
+  function removeWager(idx) { setWagers(wagers.filter((_, i) => i !== idx)); }
+
+  function updateParticipant(idx, updated) { setParticipants(participants.map((p, i) => i === idx ? updated : p)); }
+  function addParticipant() { setParticipants([...participants, emptyParticipant("", durationBet)]); }
+  function removeParticipant(idx) { setParticipants(participants.filter((_, i) => i !== idx)); }
+
+  function resetForm() {
+    setTitle("");
+    setDescription("");
+    setCategory(CATEGORIES[0]);
+    setMode("wager");
+    setDurationBet(false);
+    setAnchorDate(new Date().toISOString().slice(0, 10));
+    setWagers([emptyWager(name)]);
+    setParticipants([emptyParticipant(name, false)]);
+    setError("");
+  }
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!title.trim()) { setError("Give this bet a title."); return; }
+
+    if (mode === "wager") {
+      for (const w of wagers) {
+        if (!w.sideA.name || !w.sideB.name) { setError("Every wager needs two sides."); return; }
+        if (!w.sideA.label.trim() || !w.sideB.label.trim()) { setError("Every wager needs a pick for each side."); return; }
+        if (!w.amount || Number(w.amount) <= 0) { setError("Every wager needs a stake amount greater than zero."); return; }
+      }
+    } else {
+      if (durationBet && !anchorDate) { setError("Duration bets need an anchor date."); return; }
+      for (const p of participants) {
+        if (!p.name) { setError("Every participant needs a name."); return; }
+        if (!p.stakeAmount || Number(p.stakeAmount) <= 0) { setError("Every participant needs a stake amount greater than zero."); return; }
+        if (durationBet) {
+          if (p.guess.minDays === "" || p.guess.minDays == null) { setError("Every participant needs a minimum days guess."); return; }
+        } else if (!String(p.guess).trim()) {
+          setError("Every participant needs a guess.");
+          return;
+        }
+      }
+    }
+
+    const bet = {
+      id: uid(),
+      title: title.trim(),
+      description: description.trim(),
+      category,
+      mode,
+      durationBet: mode === "pool" ? durationBet : false,
+      anchorDate: mode === "pool" && durationBet ? anchorDate : null,
+      status: "draft",
+      outcome: null,
+      createdAt: nowIso(),
+      createdBy: name,
+      lockedAt: null,
+      resolvedAt: null,
+      comments: [],
+      wagers: mode === "wager" ? wagers.map(w => ({
+        id: w.id, stakeType: w.stakeType, amount: Number(w.amount),
+        sideA: { name: w.sideA.name, label: w.sideA.label.trim() },
+        sideB: { name: w.sideB.name, label: w.sideB.label.trim() },
+        settledA: false, settledB: false,
+      })) : null,
+      participants: mode === "pool" ? participants.map(p => ({
+        name: p.name,
+        guess: durationBet
+          ? { minDays: Number(p.guess.minDays), maxDays: (p.guess.maxDays === null || p.guess.maxDays === "") ? null : Number(p.guess.maxDays) }
+          : String(p.guess).trim(),
+        stakeType: p.stakeType,
+        stakeAmount: Number(p.stakeAmount),
+        settled: false,
+      })) : null,
+    };
+
+    onCreate(bet);
+    resetForm();
+  }
+
+  return (
+    <div className="card">
+      <h3 style={{ marginBottom: "16px" }}>Create a New Bet</h3>
+      <form className="form-grid" onSubmit={handleSubmit}>
+        <div className="form-row">
+          <label className="form-label">Title</label>
+          <input className="form-input" placeholder="e.g. Cowboys vs Broncos: More Wins in 2026" value={title} onChange={e => setTitle(e.target.value)} />
+        </div>
+        <div className="form-row">
+          <label className="form-label">Description</label>
+          <textarea className="form-textarea" placeholder="Add any extra detail about how this bet gets settled..." value={description} onChange={e => setDescription(e.target.value)} />
+        </div>
+        <div className="form-row row-inline">
+          <div className="form-row">
+            <label className="form-label">Category</label>
+            <select className="form-select" value={category} onChange={e => setCategory(e.target.value)}>
+              {CATEGORIES.filter(c => c !== "Weekly AI").map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div className="form-row">
+            <label className="form-label">Bet Type</label>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button type="button" className={"btn " + (mode === "wager" ? "btn-primary" : "btn-secondary")} onClick={() => setMode("wager")}>Wager (1-on-1)</button>
+              <button type="button" className={"btn " + (mode === "pool" ? "btn-primary" : "btn-secondary")} onClick={() => setMode("pool")}>Pool (group)</button>
+            </div>
+          </div>
+        </div>
+
+        {mode === "pool" && (
+          <div className="form-row">
+            <label className="form-label">
+              <input type="checkbox" checked={durationBet} onChange={toggleDurationBet} style={{ marginRight: "6px" }} />
+              This is a "how long will it last" bet (everyone guesses a day range)
+            </label>
+            {durationBet && (
+              <div style={{ marginTop: "8px" }}>
+                <label className="form-label">Anchor date (day 0)</label>
+                <input className="form-input" type="date" value={anchorDate} onChange={e => setAnchorDate(e.target.value)} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {mode === "wager" ? (
+          <div className="form-row">
+            <label className="form-label">Wagers</label>
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              {wagers.map((w, i) => (
+                <WagerRowEditor key={w.id} wager={w} friends={friends} onChange={u => updateWager(i, u)} onRemove={() => removeWager(i)} canRemove={wagers.length > 1} />
+              ))}
+            </div>
+            <button type="button" className="btn btn-secondary btn-sm" style={{ marginTop: "10px" }} onClick={addWager}>+ Add another wager</button>
+          </div>
+        ) : (
+          <div className="form-row">
+            <label className="form-label">Participants</label>
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              {participants.map((p, i) => (
+                <ParticipantRowEditor key={p.id} participant={p} durationBet={durationBet} friends={friends} onChange={u => updateParticipant(i, u)} onRemove={() => removeParticipant(i)} canRemove={participants.length > 1} />
+              ))}
+            </div>
+            <button type="button" className="btn btn-secondary btn-sm" style={{ marginTop: "10px" }} onClick={addParticipant}>+ Add another participant</button>
+          </div>
+        )}
+
+        {error && <div className="form-error">{error}</div>}
+        <div className="form-actions">
+          <button type="submit" className="btn btn-primary">Create Draft Bet</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ============================================================
+// Badges
+// ============================================================
+function StatusBadge({ status }) {
+  const meta = STATUS_META[status] || STATUS_META.draft;
+  return <span className={"bet-badge " + meta.className}>{meta.label}</span>;
+}
+
+function CategoryBadge({ category }) {
+  const meta = CATEGORY_META[category] || CATEGORY_META["Sports"];
+  return <span className={"bet-badge " + meta.className}>{meta.label}</span>;
+}
+
+// ============================================================
+// Duration progress / current-leader tracker
+// ============================================================
+function DurationProgress({ bet }) {
+  const isResolved = bet.status === "resolved" && bet.outcome && bet.outcome.actualDays != null;
+  const elapsedDays = daysBetween(bet.anchorDate, new Date());
+  const actualDays = isResolved ? bet.outcome.actualDays : elapsedDays;
+
+  const finiteBounds = [actualDays];
+  (bet.participants || []).forEach(p => {
+    if (p.guess.minDays != null) finiteBounds.push(p.guess.minDays);
+    if (p.guess.maxDays != null) finiteBounds.push(p.guess.maxDays);
+  });
+  const displayMax = Math.max(...finiteBounds, 1) * 1.1;
+  const pct = Math.min(100, (actualDays / displayMax) * 100);
+
+  const leaders = (bet.participants || []).filter(p => withinRange(actualDays, p.guess.minDays, p.guess.maxDays));
+  const label = isResolved ? "Winner" : "Currently in the lead";
+
+  return (
+    <div className="detail-section">
+      <h4>Duration Tracker</h4>
+      <div className="duration-progress">
+        <div className="duration-progress-track">
+          <div className="duration-progress-fill" style={{ width: pct + "%" }} />
+        </div>
+        <div className="duration-progress-label">
+          <span>Day {actualDays}{!isResolved ? " (today)" : ""}</span>
+          <span>since {formatDate(bet.anchorDate)}</span>
+        </div>
+      </div>
+      <div className="duration-leader">
+        {leaders.length === 0 ? `${label}: nobody yet` : `${label}: ${leaders.map(p => p.name).join(", ")}`}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PIN modal -- gates "Lock Bet" and "Confirm Resolution"
+// ============================================================
+function PinModal({ title, message, onConfirm, onCancel }) {
+  const [pin, setPin] = React.useState("");
+  const [error, setError] = React.useState("");
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (pin === ADMIN_PIN) {
+      setError("");
+      onConfirm();
+    } else {
+      setError("Incorrect PIN.");
+      setPin("");
+    }
+  }
+
+  return (
+    <div className="form-overlay" onClick={onCancel}>
+      <div className="form-modal" onClick={e => e.stopPropagation()}>
+        <h3>{title}</h3>
+        {message && <p style={{ color: "var(--text-dim)", fontSize: "13px", marginBottom: "12px" }}>{message}</p>}
+        <form className="form-grid" onSubmit={handleSubmit}>
+          <div className="form-row">
+            <label className="form-label">Admin PIN</label>
+            <input className="form-input" type="password" inputMode="numeric" autoFocus value={pin} onChange={e => setPin(e.target.value)} />
+          </div>
+          {error && <div className="form-error">{error}</div>}
+          <div className="form-actions">
+            <button type="button" className="btn btn-secondary" onClick={onCancel}>Cancel</button>
+            <button type="submit" className="btn btn-primary">Confirm</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Bets list -- filters + grid of bet cards
+// ============================================================
+function BetsList({ bets, onSelectBet, onGoToNewBet }) {
+  const [statusFilter, setStatusFilter] = React.useState("all");
+  const [categoryFilter, setCategoryFilter] = React.useState("all");
+
+  const filtered = bets
+    .filter(b => statusFilter === "all" || b.status === statusFilter)
+    .filter(b => categoryFilter === "all" || b.category === categoryFilter)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  return (
+    <div>
+      <div className="filter-bar">
+        <select className="form-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+          <option value="all">All Statuses</option>
+          {Object.keys(STATUS_META).map(s => <option key={s} value={s}>{STATUS_META[s].label}</option>)}
+        </select>
+        <select className="form-select" value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}>
+          <option value="all">All Categories</option>
+          {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <button className="btn btn-primary" style={{ marginLeft: "auto" }} onClick={onGoToNewBet}>+ New Bet</button>
+      </div>
+      {filtered.length === 0 ? (
+        <div className="empty-state">
+          <div className="empty-state-icon">🎲</div>
+          <div>No bets match these filters yet.</div>
+        </div>
+      ) : (
+        <div className="bet-grid">
+          {filtered.map(bet => (
+            <div key={bet.id} className="bet-card" onClick={() => onSelectBet(bet.id)}>
+              <div className="bet-card-top">
+                <div className="bet-card-title">{bet.title}</div>
+              </div>
+              <div className="bet-card-badges">
+                <StatusBadge status={bet.status} />
+                <CategoryBadge category={bet.category} />
+              </div>
+              {bet.description && <div className="bet-card-desc">{bet.description}</div>}
+              <div className="bet-card-meta">
+                <span>{bet.mode === "wager" ? `${bet.wagers.length} wager${bet.wagers.length !== 1 ? "s" : ""}` : `${bet.participants.length} in the pool`}</span>
+                <span>{formatDate(bet.createdAt)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// Bet detail -- slide-over with positions, lifecycle actions, comments
+// ============================================================
+function BetDetail({ bet, onClose, onSubmitResolution, onReviseResolution, onAddComment, onToggleSettle, onRequestLock, onRequestConfirmResolution }) {
+  const [commentText, setCommentText] = React.useState("");
+  const [resultDraft, setResultDraft] = React.useState("");
+  const [actualDateDraft, setActualDateDraft] = React.useState(() => new Date().toISOString().slice(0, 10));
+  const [noteDraft, setNoteDraft] = React.useState("");
+  const [reminderDate, setReminderDate] = React.useState(() => bet.anchorDate || new Date().toISOString().slice(0, 10));
+
+  function handleAddToCalendar() {
+    const ics = buildICS({
+      title: `Barbets: ${bet.title}`,
+      description: bet.description ? `${bet.description}\n\nFollow up on this bet in Barbets.` : "Follow up on this bet in Barbets.",
+      date: reminderDate,
+    });
+    downloadICS(`barbet-${bet.id}.ics`, ics);
+  }
+
+  function handleCommentSubmit(e) {
+    e.preventDefault();
+    if (!commentText.trim()) return;
+    onAddComment(bet.id, commentText.trim());
+    setCommentText("");
+  }
+
+  function handleResolutionSubmit(e) {
+    e.preventDefault();
+    let outcome;
+    if (bet.durationBet) {
+      const actualDays = daysBetween(bet.anchorDate, new Date(actualDateDraft + "T00:00:00"));
+      outcome = { actualDate: actualDateDraft, actualDays, note: noteDraft.trim() };
+    } else {
+      if (!resultDraft.trim()) return;
+      outcome = { result: resultDraft.trim(), note: noteDraft.trim() };
+    }
+    onSubmitResolution(bet.id, outcome);
+    setResultDraft("");
+    setNoteDraft("");
+  }
+
+  const sortedComments = (bet.comments || []).slice().sort((a, b) => new Date(a.ts) - new Date(b.ts));
+
+  return (
+    <div className="detail-overlay" onClick={onClose}>
+      <div className="detail-panel" onClick={e => e.stopPropagation()}>
+        <div className="detail-head">
+          <div>
+            <h3>{bet.title}</h3>
+            <div className="bet-card-badges" style={{ marginTop: "8px" }}>
+              <StatusBadge status={bet.status} />
+              <CategoryBadge category={bet.category} />
+            </div>
+          </div>
+          <button className="detail-close" onClick={onClose}>&times;</button>
+        </div>
+
+        {bet.description && <p style={{ color: "var(--text-dim)", fontSize: "14px", lineHeight: "1.5" }}>{bet.description}</p>}
+
+        <div className="detail-section">
+          <h4>Add Reminder to Calendar</h4>
+          <div className="form-row row-inline">
+            <input className="form-input" type="date" value={reminderDate} onChange={e => setReminderDate(e.target.value)} />
+            <button type="button" className="btn btn-secondary" style={{ flex: "none" }} onClick={handleAddToCalendar}>📅 Download .ics</button>
+          </div>
+        </div>
+
+        {bet.durationBet && bet.status !== "draft" && <DurationProgress bet={bet} />}
+
+        <div className="detail-section">
+          <h4>{bet.mode === "wager" ? "Wagers" : "Participants"}</h4>
+          {bet.mode === "wager" ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              {bet.wagers.map((w, i) => {
+                const winA = bet.status === "resolved" && isWagerWinner(w, bet.outcome, "A");
+                const winB = bet.status === "resolved" && isWagerWinner(w, bet.outcome, "B");
+                const stakeLabel = w.stakeType === "cash" ? `$${w.amount}` : `🍺 ${w.amount}`;
+                return (
+                  <div key={w.id} className={"wager-row" + (winA || winB ? " win" : "")}>
+                    <div className="position-left">
+                      <div className="position-names">{w.sideA.name} ({w.sideA.label}) vs {w.sideB.name} ({w.sideB.label})</div>
+                      <div className="position-detail">
+                        {stakeLabel} each way
+                        {winA ? ` -- ${w.sideA.name} won` : winB ? ` -- ${w.sideB.name} won` : ""}
+                      </div>
+                    </div>
+                    <div className="position-right">
+                      <div className="position-stake">{stakeLabel}</div>
+                      {bet.status === "resolved" && (
+                        <React.Fragment>
+                          <button className={"settle-toggle" + (w.settledA ? " settled" : "")} onClick={() => onToggleSettle(bet, "wager", i, "A")}>{w.sideA.name}: {w.settledA ? "Settled" : "Unsettled"}</button>
+                          <button className={"settle-toggle" + (w.settledB ? " settled" : "")} onClick={() => onToggleSettle(bet, "wager", i, "B")}>{w.sideB.name}: {w.settledB ? "Settled" : "Unsettled"}</button>
+                        </React.Fragment>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              {bet.participants.map((p, i) => {
+                const win = bet.status === "resolved" && isParticipantWinner(bet, p);
+                const stakeLabel = p.stakeType === "cash" ? `$${p.stakeAmount}` : `🍺 ${p.stakeAmount}`;
+                return (
+                  <div key={p.name + i} className={"participant-row" + (win ? " win" : "")}>
+                    <div className="position-left">
+                      <div className="position-names">{p.name}{win ? " 🏆" : ""}</div>
+                      <div className="position-detail">Guess: {formatGuess(bet, p.guess)}</div>
+                    </div>
+                    <div className="position-right">
+                      <div className="position-stake">{stakeLabel}</div>
+                      {bet.status === "resolved" && (
+                        <button className={"settle-toggle" + (p.settled ? " settled" : "")} onClick={() => onToggleSettle(bet, "pool", i)}>{p.settled ? "Settled" : "Unsettled"}</button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {bet.status === "resolved" && bet.outcome && (
+          <div className="detail-section">
+            <h4>Outcome</h4>
+            <div className="card" style={{ background: "var(--card-2)" }}>
+              {bet.durationBet ? (
+                <div>Settled on day {bet.outcome.actualDays} ({formatDate(bet.outcome.actualDate)})</div>
+              ) : (
+                <div>Result: <strong>{bet.outcome.result}</strong></div>
+              )}
+              {bet.outcome.note && <div style={{ marginTop: "6px", color: "var(--text-dim)", fontSize: "13px" }}>{bet.outcome.note}</div>}
+            </div>
+          </div>
+        )}
+
+        {bet.status === "resolved-pending" && bet.outcome && (
+          <div className="detail-section">
+            <h4>Proposed Outcome (awaiting confirmation)</h4>
+            <div className="card" style={{ background: "var(--card-2)" }}>
+              {bet.durationBet ? (
+                <div>Day {bet.outcome.actualDays} ({formatDate(bet.outcome.actualDate)})</div>
+              ) : (
+                <div>Result: <strong>{bet.outcome.result}</strong></div>
+              )}
+              {bet.outcome.note && <div style={{ marginTop: "6px", color: "var(--text-dim)", fontSize: "13px" }}>{bet.outcome.note}</div>}
+            </div>
+          </div>
+        )}
+
+        {bet.status === "locked" && (
+          <div className="detail-section">
+            <h4>Propose Resolution</h4>
+            <form className="form-grid" onSubmit={handleResolutionSubmit}>
+              {bet.durationBet ? (
+                <div className="form-row">
+                  <label className="form-label">Actual end date</label>
+                  <input className="form-input" type="date" value={actualDateDraft} onChange={e => setActualDateDraft(e.target.value)} />
+                </div>
+              ) : (
+                <div className="form-row">
+                  <label className="form-label">Winning result</label>
+                  <input className="form-input" placeholder="e.g. Cowboys, or Under 6 months" value={resultDraft} onChange={e => setResultDraft(e.target.value)} />
+                </div>
+              )}
+              <div className="form-row">
+                <label className="form-label">Note (optional)</label>
+                <input className="form-input" placeholder="Any context for the result" value={noteDraft} onChange={e => setNoteDraft(e.target.value)} />
+              </div>
+              <div className="form-actions">
+                <button type="submit" className="btn btn-secondary">Submit Resolution</button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        <div className="detail-section">
+          <h4>Comments</h4>
+          <div className="comment-list">
+            {sortedComments.map((c, i) => (
+              <div key={i} className="comment-item">
+                <div className="comment-head"><span className="comment-name">{c.name}</span><span>{formatDateTime(c.ts)}</span></div>
+                <div>{c.text}</div>
+              </div>
+            ))}
+            {sortedComments.length === 0 && <div style={{ color: "var(--text-dim)", fontSize: "13px" }}>No comments yet.</div>}
+          </div>
+          <form className="form-row row-inline" style={{ marginTop: "10px" }} onSubmit={handleCommentSubmit}>
+            <input className="form-input" placeholder="Add a comment..." value={commentText} onChange={e => setCommentText(e.target.value)} />
+            <button type="submit" className="btn btn-secondary" style={{ flex: "none" }}>Post</button>
+          </form>
+        </div>
+
+        {(bet.status === "draft" || bet.status === "resolved-pending") && (
+          <div className="detail-section">
+            <div className="form-actions" style={{ justifyContent: "flex-start" }}>
+              {bet.status === "draft" && (
+                <button className="btn btn-primary" onClick={() => onRequestLock(bet.id)}>Lock Bet</button>
+              )}
+              {bet.status === "resolved-pending" && (
+                <React.Fragment>
+                  <button className="btn btn-primary" onClick={() => onRequestConfirmResolution(bet.id)}>Confirm Resolution</button>
+                  <button className="btn btn-secondary" onClick={() => onReviseResolution(bet.id)}>Revise</button>
+                </React.Fragment>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Leaderboard
+// ============================================================
+function Leaderboard({ bets, friends }) {
+  const rows = computeLeaderboard(bets, friends);
+  const resolvedCount = bets.filter(b => b.status === "resolved").length;
+
+  if (resolvedCount === 0) {
+    return (
+      <div className="empty-state">
+        <div className="empty-state-icon">🏆</div>
+        <div>No resolved bets yet -- the leaderboard fills in once bets are settled.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card">
+      <h3 style={{ marginBottom: "16px" }}>Leaderboard</h3>
+      <div className="table-scroll">
+        <table className="leaderboard-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Name</th>
+              <th>Net Cash</th>
+              <th>Net Beers</th>
+              <th>W-L</th>
+              <th>Pending</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={r.name}>
+                <td className="rank">{i + 1}</td>
+                <td>{r.name}</td>
+                <td>{formatNet(r.netCash, "cash")}</td>
+                <td>{formatNet(r.netBeers, "beer")}</td>
+                <td>{r.wins}-{r.losses}</td>
+                <td>{r.pending > 0 ? r.pending : "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Activity feed
+// ============================================================
+function ActivityFeed({ bets, onSelectBet }) {
+  const entries = buildActivityFeed(bets);
+
+  if (entries.length === 0) {
+    return (
+      <div className="empty-state">
+        <div className="empty-state-icon">📰</div>
+        <div>Nothing's happened yet -- create a bet to get the action started.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="activity-list">
+      {entries.map(entry => (
+        <div key={entry.id} className="activity-item" onClick={() => onSelectBet(entry.betId)}>
+          <div className="activity-icon">{entry.icon}</div>
+          <div className="activity-body">
+            <div className="activity-title">{entry.title}</div>
+            <div className="activity-sub">{entry.sub}</div>
+          </div>
+          <div className="activity-time">{formatDateTime(entry.ts)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(
+  <React.Fragment>
+    <style>{CSS}</style>
+    <App />
+  </React.Fragment>
+);
+
+</script>
+</body>
+</html>
