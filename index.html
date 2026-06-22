@@ -231,7 +231,9 @@ function computeLeaderboard(bets, friends) {
     }
   });
 
-  return Object.values(stats).sort((a, b) => b.netCash - a.netCash);
+  return Object.values(stats)
+    .filter(s => s.netCash !== 0 || s.netBeers !== 0)
+    .sort((a, b) => b.netBeers - a.netBeers || b.netCash - a.netCash);
 }
 
 // ---- Activity feed (derived from bet lifecycle timestamps + comments) ----
