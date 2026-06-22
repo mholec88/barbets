@@ -898,7 +898,7 @@ function BarbetsApp({ name, friends, onSwitchUser }) {
   }
 
   function handleSubmitResolution(betId, outcome) {
-    updateBet(betId, { status: "resolved-pending", outcome });
+    return updateBet(betId, { status: "resolved-pending", outcome });
   }
 
   function handleReviseResolution(betId) {
@@ -1495,6 +1495,8 @@ function BetDetail({ bet, onClose, onSubmitResolution, onReviseResolution, onAdd
   const [actualDateDraft, setActualDateDraft] = React.useState(() => new Date().toISOString().slice(0, 10));
   const [noteDraft, setNoteDraft] = React.useState("");
   const [reminderDate, setReminderDate] = React.useState(() => bet.anchorDate || new Date().toISOString().slice(0, 10));
+  const [resolutionError, setResolutionError] = React.useState("");
+  const [resolutionSubmitting, setResolutionSubmitting] = React.useState(false);
 
   function handleAddToCalendar() {
     const ics = buildICS({
@@ -1519,12 +1521,25 @@ function BetDetail({ bet, onClose, onSubmitResolution, onReviseResolution, onAdd
       const actualDays = daysBetween(bet.anchorDate, new Date(actualDateDraft + "T00:00:00"));
       outcome = { actualDate: actualDateDraft, actualDays, note: noteDraft.trim() };
     } else {
-      if (!resultDraft.trim()) return;
+      if (!resultDraft.trim()) {
+        setResolutionError("Enter the winning result before submitting.");
+        return;
+      }
       outcome = { result: resultDraft.trim(), note: noteDraft.trim() };
     }
-    onSubmitResolution(bet.id, outcome);
-    setResultDraft("");
-    setNoteDraft("");
+    setResolutionError("");
+    setResolutionSubmitting(true);
+    Promise.resolve(onSubmitResolution(bet.id, outcome))
+      .then(() => {
+        setResultDraft("");
+        setNoteDraft("");
+        setResolutionSubmitting(false);
+      })
+      .catch(err => {
+        console.error("Failed to submit resolution:", err);
+        setResolutionError("Save failed — check your connection and try again.");
+        setResolutionSubmitting(false);
+      });
   }
 
   const sortedComments = (bet.comments || []).slice().sort((a, b) => new Date(a.ts) - new Date(b.ts));
@@ -1656,8 +1671,9 @@ function BetDetail({ bet, onClose, onSubmitResolution, onReviseResolution, onAdd
                 <label className="form-label">Note (optional)</label>
                 <input className="form-input" placeholder="Any context for the result" value={noteDraft} onChange={e => setNoteDraft(e.target.value)} />
               </div>
+              {resolutionError && <div className="form-error">{resolutionError}</div>}
               <div className="form-actions">
-                <button type="submit" className="btn btn-secondary">Submit Resolution</button>
+                <button type="submit" className="btn btn-secondary" disabled={resolutionSubmitting}>{resolutionSubmitting ? "Submitting..." : "Submit Resolution"}</button>
               </div>
             </form>
           </div>
